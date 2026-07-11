@@ -30,4 +30,10 @@ var (
 
 	// ErrMalformedRefresh is returned when a refresh token string is malformed.
 	ErrMalformedRefresh = errors.New("auth: malformed refresh token")
+
+	// ErrRefreshUsed is returned by RefreshStore.Rotate implementations
+	// when the old token was already rotated or revoked. Callers treat it
+	// as token reuse: revoke the subject's other sessions and require a
+	// fresh login.
+	ErrRefreshUsed = errors.New("auth: refresh token already used")
 )

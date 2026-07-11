@@ -77,7 +77,9 @@ func hashSecret(secret string) string {
 type RefreshStore interface {
 	// Save stores a new refresh token.
 	Save(ctx context.Context, rt RefreshToken) error
-	// Rotate atomically revokes oldID and stores next.
+	// Rotate atomically revokes oldID and stores next. When oldID was
+	// already rotated or revoked, implementations return ErrRefreshUsed so
+	// the caller can respond to token reuse.
 	Rotate(ctx context.Context, oldID string, next RefreshToken) error
 	// Revoke removes a refresh token by id.
 	Revoke(ctx context.Context, id string) error
