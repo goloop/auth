@@ -62,12 +62,19 @@ type pbkdf2Hasher struct {
 // HashOption configures NewPBKDF2.
 type HashOption func(*pbkdf2Hasher)
 
-// WithIterations sets the PBKDF2 iteration count.
+// WithIterations sets the PBKDF2 iteration count. A non-positive value is
+// ignored. The count is capped at the verification ceiling so a hasher can
+// never produce a hash its own Verify would reject as out of bounds; a very low
+// value is accepted but weakens the hash, so keep it high in production.
 func WithIterations(n int) HashOption {
 	return func(h *pbkdf2Hasher) {
-		if n > 0 {
-			h.iterations = n
+		if n <= 0 {
+			return
 		}
+		if n > maxVerifyIterations {
+			n = maxVerifyIterations
+		}
+		h.iterations = n
 	}
 }
 

@@ -94,6 +94,8 @@ reconstructs the subject.
 ```go
 func (m *TokenManager) Bearer(next http.Handler) http.Handler
 func (m *TokenManager) Cookie(name string, next http.Handler) http.Handler
+func (m *TokenManager) Protect(next http.Handler) http.Handler
+func (m *TokenManager) ProtectScope(scope string, next http.Handler) http.Handler
 func Require(next http.Handler) http.Handler
 func RequireScope(scope string, next http.Handler) http.Handler
 ```
@@ -103,6 +105,11 @@ Both: a valid token sets the subject; a present but invalid token returns 401;
 an absent token passes through, leaving enforcement to `Require`/`RequireScope`.
 `Require` returns 401 without a subject; `RequireScope` returns 401 without a
 subject or 403 without the scope.
+
+`Protect` is `Bearer` + `Require` in one call, and `ProtectScope` is `Bearer` +
+`RequireScope`. Prefer them for a route that must never be reached
+unauthenticated: wrapping a handler with `Bearer` alone lets an anonymous
+request through, which is an easy mistake to make.
 
 ## Refresh tokens
 

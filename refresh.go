@@ -31,11 +31,11 @@ func NewRefreshToken(subject string, ttl time.Duration) (RefreshToken, string, e
 	if ttl <= 0 {
 		return RefreshToken{}, "", ErrInvalidTTL
 	}
-	idBytes := make([]byte, 16)
+	idBytes := make([]byte, refreshIDBytes)
 	if _, err := rand.Read(idBytes); err != nil {
 		return RefreshToken{}, "", err
 	}
-	secretBytes := make([]byte, 32)
+	secretBytes := make([]byte, refreshSecretBytes)
 	if _, err := rand.Read(secretBytes); err != nil {
 		return RefreshToken{}, "", err
 	}
@@ -51,14 +51,39 @@ func NewRefreshToken(subject string, ttl time.Duration) (RefreshToken, string, e
 	return rt, id + "." + secret, nil
 }
 
+// Token part sizes. NewRefreshToken emits a hex-encoded id and secret of fixed
+// length; ParseRefreshToken enforces exactly these so a malformed or oversized
+// token is rejected before any hashing or store lookup.
+const (
+	refreshIDBytes     = 16
+	refreshSecretBytes = 32
+	refreshIDLen       = 2 * refreshIDBytes     // hex characters
+	refreshSecretLen   = 2 * refreshSecretBytes // hex characters
+)
+
 // ParseRefreshToken splits an opaque token string into its id and secret. The
-// token must be exactly "id.secret" with both parts non-empty.
+// token must be exactly "id.secret", each a lowercase-hex string of the length
+// NewRefreshToken produces; anything else is ErrMalformedRefresh.
 func ParseRefreshToken(token string) (id, secret string, err error) {
 	parts := strings.Split(token, ".")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 ||
+		len(parts[0]) != refreshIDLen || len(parts[1]) != refreshSecretLen ||
+		!isHexString(parts[0]) || !isHexString(parts[1]) {
 		return "", "", ErrMalformedRefresh
 	}
 	return parts[0], parts[1], nil
+}
+
+// isHexString reports whether s is non-empty and all lowercase hex digits,
+// matching what hex.EncodeToString produces.
+func isHexString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Verify checks the secret against the stored hash (constant time) and the

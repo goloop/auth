@@ -47,6 +47,20 @@ func (m *TokenManager) Cookie(name string, next http.Handler) http.Handler {
 	})
 }
 
+// Protect requires a valid bearer token. It authenticates like Bearer and then
+// rejects any request that arrives without a subject (401). Prefer it over
+// wrapping a handler with Bearer alone, which passes an unauthenticated request
+// through: Protect makes "this route needs a token" a single, hard guarantee.
+func (m *TokenManager) Protect(next http.Handler) http.Handler {
+	return m.Bearer(Require(next))
+}
+
+// ProtectScope is Protect plus a scope check: 401 without a valid token, 403
+// when the authenticated subject lacks the scope.
+func (m *TokenManager) ProtectScope(scope string, next http.Handler) http.Handler {
+	return m.Bearer(RequireScope(scope, next))
+}
+
 // Require rejects requests without an authenticated subject (401). Chain it
 // after Bearer or Cookie.
 func Require(next http.Handler) http.Handler {

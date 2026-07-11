@@ -93,6 +93,8 @@ sub, err := tm.Verify(token)
 ```go
 func (m *TokenManager) Bearer(next http.Handler) http.Handler
 func (m *TokenManager) Cookie(name string, next http.Handler) http.Handler
+func (m *TokenManager) Protect(next http.Handler) http.Handler
+func (m *TokenManager) ProtectScope(scope string, next http.Handler) http.Handler
 func Require(next http.Handler) http.Handler
 func RequireScope(scope string, next http.Handler) http.Handler
 ```
@@ -102,6 +104,11 @@ func RequireScope(scope string, next http.Handler) http.Handler
 відсутній токен пропускає далі, лишаючи enforcement на `Require`/`RequireScope`.
 `Require` дає 401 без subject; `RequireScope` дає 401 без subject або 403 без
 scope.
+
+`Protect` - це `Bearer` + `Require` одним викликом, а `ProtectScope` - `Bearer` +
+`RequireScope`. Для маршруту, який ніколи не має бути доступним без автентифікації,
+надавайте перевагу саме їм: обгортка лише `Bearer` пропускає анонімний запит
+далі, і це легка помилка.
 
 ## Refresh-токени
 

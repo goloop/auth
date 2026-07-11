@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,8 +268,8 @@ func TestPasswordVerifyBounds(t *testing.T) {
 	// salt "salt" (4 bytes) is below the 8-byte floor; digest below 16 bytes;
 	// an absurd iteration count is above the cap. All are rejected.
 	bad := []string{
-		"pbkdf2-sha256$10000$c2FsdA$" + b64("0123456789abcdef0123456789abcdef"), // salt too short
-		"pbkdf2-sha256$10000$" + b64("0123456789abcdef") + "$" + b64("short"),    // digest too short
+		"pbkdf2-sha256$10000$c2FsdA$" + b64("0123456789abcdef0123456789abcdef"),                                // salt too short
+		"pbkdf2-sha256$10000$" + b64("0123456789abcdef") + "$" + b64("short"),                                  // digest too short
 		"pbkdf2-sha256$99999999999$" + b64("0123456789abcdef") + "$" + b64("0123456789abcdef0123456789abcdef"), // iter over cap
 	}
 	for _, enc := range bad {
@@ -297,6 +298,66 @@ func TestNeedsRehash(t *testing.T) {
 	// A malformed hash needs a rehash.
 	if !rh.NeedsRehash("garbage") {
 		t.Fatal("malformed hash should need rehash")
+	}
+}
+
+func TestWithIterationsCappedToVerifyCeiling(t *testing.T) {
+	// Requesting more iterations than the verification ceiling must not produce
+	// a hash the same hasher then rejects as out of bounds.
+	h := NewPBKDF2(WithIterations(maxVerifyIterations + 5_000_000))
+	enc, err := h.Hash([]byte("pw"))
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := h.Verify(enc, []byte("pw")); err != nil {
+		t.Fatalf("verify capped-iteration hash: %v", err)
+	}
+}
+
+func TestParseRefreshTokenBounds(t *testing.T) {
+	_, tok, err := NewRefreshToken("user-1", time.Hour)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if _, _, err := ParseRefreshToken(tok); err != nil {
+		t.Fatalf("valid token rejected: %v", err)
+	}
+	bad := []string{
+		"",
+		"onlyid",
+		"a.b",          // too short, non-hex length
+		tok + ".extra", // three parts
+		strings.Repeat("a", 32) + "." + strings.Repeat("z", 64),   // right length, non-hex
+		strings.Repeat("a", 31) + "." + strings.Repeat("a", 64),   // id one short
+		strings.Repeat("a", 4000) + "." + strings.Repeat("a", 64), // oversized id
+	}
+	for _, b := range bad {
+		if _, _, err := ParseRefreshToken(b); err != ErrMalformedRefresh {
+			t.Errorf("ParseRefreshToken(%.16q...) = %v, want ErrMalformedRefresh", b, err)
+		}
+	}
+}
+
+func TestProtectRequiresToken(t *testing.T) {
+	tm := NewTokenManager(secret, WithTTL(time.Hour))
+	tok, _ := tm.Issue(Subject{ID: "user-1"})
+	h := tm.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// No token: 401 (the footgun Protect closes).
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d, want 401", rec.Code)
+	}
+	// Valid token: pass.
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid token: got %d, want 200", rec.Code)
 	}
 }
 
