@@ -48,15 +48,22 @@ func WithLeeway(d time.Duration) TokenOption {
 	return func(m *TokenManager) { m.leeway = d }
 }
 
-// WithClock overrides the time source (for testing).
+// WithClock overrides the time source (for testing). A nil function is ignored.
 func WithClock(now func() time.Time) TokenOption {
-	return func(m *TokenManager) { m.now = now }
+	return func(m *TokenManager) {
+		if now != nil {
+			m.now = now
+		}
+	}
 }
 
-// NewTokenManager creates a TokenManager with the given HMAC secret.
+// NewTokenManager creates a TokenManager with the given HMAC secret. The secret
+// must be at least 32 bytes (the HS256 minimum); a shorter one makes Issue and
+// Verify fail with jwt.ErrWeakKey. The secret is copied, so the caller may reuse
+// or zero its slice afterwards.
 func NewTokenManager(secret []byte, opts ...TokenOption) *TokenManager {
 	m := &TokenManager{
-		secret: secret,
+		secret: append([]byte(nil), secret...),
 		ttl:    defaultAccessTTL,
 		now:    time.Now,
 	}

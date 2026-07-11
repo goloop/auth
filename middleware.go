@@ -80,7 +80,7 @@ func RequireScope(scope string, next http.Handler) http.Handler {
 // second result reports whether a Bearer credential was presented at all
 // (even an empty one), so the caller can reject a malformed Bearer header
 // instead of treating it as anonymous. A different scheme or absent header
-// returns (", false).
+// returns ("", false).
 func bearerToken(r *http.Request) (string, bool) {
 	h := r.Header.Get("Authorization")
 	if h == "" {

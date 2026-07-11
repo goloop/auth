@@ -21,8 +21,16 @@ type RefreshToken struct {
 
 // NewRefreshToken creates a refresh token for the subject. It returns the
 // server-side record (to store) and the opaque token string (to give the
-// client, in the form "id.secret"). The raw secret is never stored.
+// client, in the form "id.secret"). The raw secret is never stored. The subject
+// must be non-empty (ErrEmptySubject) and the ttl positive (ErrInvalidTTL), so
+// a token cannot be minted without an owner or already expired.
 func NewRefreshToken(subject string, ttl time.Duration) (RefreshToken, string, error) {
+	if subject == "" {
+		return RefreshToken{}, "", ErrEmptySubject
+	}
+	if ttl <= 0 {
+		return RefreshToken{}, "", ErrInvalidTTL
+	}
 	idBytes := make([]byte, 16)
 	if _, err := rand.Read(idBytes); err != nil {
 		return RefreshToken{}, "", err
@@ -54,7 +62,10 @@ func ParseRefreshToken(token string) (id, secret string, err error) {
 }
 
 // Verify checks the secret against the stored hash (constant time) and the
-// expiry. Look the record up by id first, then call Verify with the secret.
+// expiry. Look the record up by id first, then call Verify with the secret. It
+// returns ErrRefreshMismatch before ErrRefreshExpired; if you surface these to
+// clients, collapse them into one opaque error so an expired token cannot be
+// used to test whether a guessed secret was correct.
 func (rt RefreshToken) Verify(secret string) error {
 	if subtle.ConstantTimeCompare([]byte(hashSecret(secret)), []byte(rt.Hash)) != 1 {
 		return ErrRefreshMismatch

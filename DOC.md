@@ -41,7 +41,28 @@ type PasswordHasher interface {
 `crypto/pbkdf2`). Defaults: 600000 iterations, 32-byte key, 16-byte random
 salt. `WithIterations(n)` tunes the cost. The encoded form is
 `pbkdf2-sha256$iterations$salt$digest` (base64), and `Verify` compares in
-constant time.
+constant time. `Verify` also enforces parameter bounds, so a malformed or
+hostile hash (a one-byte digest, a billion iterations) is rejected before any
+key derivation runs rather than weakening the check or burning CPU.
+
+The hasher also implements `Rehasher`:
+
+```go
+type Rehasher interface {
+	NeedsRehash(encoded string) bool
+}
+```
+
+Call `NeedsRehash` after a successful `Verify` to upgrade a stored hash when the
+defaults strengthen:
+
+```go
+if err := h.Verify(stored, pw); err == nil {
+	if rh, ok := h.(auth.Rehasher); ok && rh.NeedsRehash(stored) {
+		newHash, _ := h.Hash(pw) // persist newHash
+	}
+}
+```
 
 To use Argon2id, implement `PasswordHasher` in your application (accepting the
 `golang.org/x/crypto` dependency there); `auth` stays dependency-clean.
@@ -62,9 +83,11 @@ sub, err := tm.Verify(token)
 | `WithLeeway(d)` | clock-skew tolerance on verify | 0 |
 | `WithClock(fn)` | time source (testing) | time.Now |
 
-`Issue` encodes the subject's ID as `sub` and its email/roles/scopes as custom
-claims. `Verify` (via `goloop/jwt`) enforces HS256, a present `exp`, the issuer
-and audience, and reconstructs the subject.
+The secret must be at least 32 bytes (the HS256 minimum); it is copied on
+construction, so the caller may reuse or zero its slice. `Issue` encodes the
+subject's ID as `sub` and its email/roles/scopes as custom claims. `Verify` (via
+`goloop/jwt`) enforces HS256, a present `exp`, the issuer and audience, and
+reconstructs the subject.
 
 ## Middleware
 
@@ -90,9 +113,13 @@ err = rt.Verify(secret) // constant-time; checks expiry
 ```
 
 `NewRefreshToken` returns a record to store (which holds only a SHA-256 hash of
-the secret) and an opaque `id.secret` token for the client. Verification looks
-the record up by `id`, then checks the secret in constant time. The secret is
-high-entropy random, so a plain hash is sufficient (unlike a password).
+the secret) and an opaque `id.secret` token for the client. The subject must be
+non-empty (`ErrEmptySubject`) and the ttl positive (`ErrInvalidTTL`), so a token
+is never minted without an owner or already expired. Verification looks the
+record up by `id`, then checks the secret in constant time. The secret is
+high-entropy random, so a plain hash is sufficient (unlike a password). `Verify`
+reports a secret mismatch before expiry; collapse both into one opaque error if
+you surface them, so an expired token cannot test a guessed secret.
 
 ```go
 type RefreshStore interface {

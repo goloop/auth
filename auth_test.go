@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -210,10 +211,27 @@ func TestRefreshToken(t *testing.T) {
 }
 
 func TestRefreshExpiry(t *testing.T) {
-	rt, token, _ := NewRefreshToken("user-1", -time.Second) // already expired
+	rt, token, err := NewRefreshToken("user-1", time.Hour)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
 	_, secret, _ := ParseRefreshToken(token)
+	// Push the stored record into the past to simulate an expired token.
+	rt.ExpiresAt = time.Now().Add(-time.Second)
 	if err := rt.Verify(secret); err != ErrRefreshExpired {
 		t.Fatalf("expected expired, got %v", err)
+	}
+}
+
+func TestNewRefreshTokenValidation(t *testing.T) {
+	if _, _, err := NewRefreshToken("", time.Hour); err != ErrEmptySubject {
+		t.Fatalf("empty subject = %v, want ErrEmptySubject", err)
+	}
+	if _, _, err := NewRefreshToken("user-1", 0); err != ErrInvalidTTL {
+		t.Fatalf("zero ttl = %v, want ErrInvalidTTL", err)
+	}
+	if _, _, err := NewRefreshToken("user-1", -time.Second); err != ErrInvalidTTL {
+		t.Fatalf("negative ttl = %v, want ErrInvalidTTL", err)
 	}
 }
 
@@ -242,4 +260,47 @@ func (s *memStore) Rotate(_ context.Context, oldID string, next RefreshToken) er
 func (s *memStore) Revoke(_ context.Context, id string) error {
 	delete(s.m, id)
 	return nil
+}
+
+func TestPasswordVerifyBounds(t *testing.T) {
+	h := NewPBKDF2(WithIterations(10000))
+	// salt "salt" (4 bytes) is below the 8-byte floor; digest below 16 bytes;
+	// an absurd iteration count is above the cap. All are rejected.
+	bad := []string{
+		"pbkdf2-sha256$10000$c2FsdA$" + b64("0123456789abcdef0123456789abcdef"), // salt too short
+		"pbkdf2-sha256$10000$" + b64("0123456789abcdef") + "$" + b64("short"),    // digest too short
+		"pbkdf2-sha256$99999999999$" + b64("0123456789abcdef") + "$" + b64("0123456789abcdef0123456789abcdef"), // iter over cap
+	}
+	for _, enc := range bad {
+		if err := h.Verify(enc, []byte("pw")); err != ErrInvalidHash {
+			t.Fatalf("enc %q: expected ErrInvalidHash, got %v", enc, err)
+		}
+	}
+}
+
+func TestNeedsRehash(t *testing.T) {
+	strong := NewPBKDF2(WithIterations(600000))
+	rh, ok := strong.(Rehasher)
+	if !ok {
+		t.Fatal("pbkdf2 hasher should implement Rehasher")
+	}
+	// A hash made with fewer iterations than the current setting needs a rehash.
+	weakHash, _ := NewPBKDF2(WithIterations(10000)).Hash([]byte("pw"))
+	if !rh.NeedsRehash(weakHash) {
+		t.Fatal("weaker hash should need rehash")
+	}
+	// A hash made at the current setting does not.
+	freshHash, _ := strong.Hash([]byte("pw"))
+	if rh.NeedsRehash(freshHash) {
+		t.Fatal("current-strength hash should not need rehash")
+	}
+	// A malformed hash needs a rehash.
+	if !rh.NeedsRehash("garbage") {
+		t.Fatal("malformed hash should need rehash")
+	}
+}
+
+// b64 raw-std-base64-encodes s, matching the encoding Hash uses.
+func b64(s string) string {
+	return base64.RawStdEncoding.EncodeToString([]byte(s))
 }
