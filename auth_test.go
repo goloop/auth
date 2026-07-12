@@ -365,3 +365,32 @@ func TestProtectRequiresToken(t *testing.T) {
 func b64(s string) string {
 	return base64.RawStdEncoding.EncodeToString([]byte(s))
 }
+
+// VerifyRefreshSecret verifies from stored fields without rebuilding a
+// RefreshToken, and stays consistent with RefreshToken.Verify.
+func TestVerifyRefreshSecret(t *testing.T) {
+	rt, wire, err := NewRefreshToken("user-42", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := ParseRefreshToken(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Correct secret against the stored hash + expiry.
+	if err := VerifyRefreshSecret(rt.Hash, rt.ExpiresAt, secret); err != nil {
+		t.Fatalf("VerifyRefreshSecret = %v, want nil", err)
+	}
+	// Wrong secret mismatches.
+	if err := VerifyRefreshSecret(rt.Hash, rt.ExpiresAt, "deadbeef"); err != ErrRefreshMismatch {
+		t.Fatalf("wrong secret = %v, want ErrRefreshMismatch", err)
+	}
+	// Expired.
+	if err := VerifyRefreshSecret(rt.Hash, time.Now().Add(-time.Minute), secret); err != ErrRefreshExpired {
+		t.Fatalf("expired = %v, want ErrRefreshExpired", err)
+	}
+	// Consistent with the method form.
+	if VerifyRefreshSecret(rt.Hash, rt.ExpiresAt, secret) != rt.Verify(secret) {
+		t.Fatal("free function and method disagree")
+	}
+}

@@ -119,6 +119,16 @@ id, secret, err := auth.ParseRefreshToken(token)
 err = rt.Verify(secret) // constant-time; checks expiry
 ```
 
+When you verify from storage you usually have the stored hash and expiry as
+plain columns, not a `RefreshToken`. `VerifyRefreshSecret` checks against those
+directly, so there is no need to rebuild the struct:
+
+```go
+id, secret, _ := auth.ParseRefreshToken(token)
+rec, _ := store.RefreshByID(ctx, id) // your storage: hash + expiry
+err := auth.VerifyRefreshSecret(rec.SecretHash, rec.ExpiresAt, secret)
+```
+
 `NewRefreshToken` returns a record to store (which holds only a SHA-256 hash of
 the secret) and an opaque `id.secret` token for the client. The subject must be
 non-empty (`ErrEmptySubject`) and the ttl positive (`ErrInvalidTTL`), so a token

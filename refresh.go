@@ -92,10 +92,21 @@ func isHexString(s string) bool {
 // clients, collapse them into one opaque error so an expired token cannot be
 // used to test whether a guessed secret was correct.
 func (rt RefreshToken) Verify(secret string) error {
-	if subtle.ConstantTimeCompare([]byte(hashSecret(secret)), []byte(rt.Hash)) != 1 {
+	return VerifyRefreshSecret(rt.Hash, rt.ExpiresAt, secret)
+}
+
+// VerifyRefreshSecret checks a presented refresh-token secret against a stored
+// hash and expiry, without rebuilding a RefreshToken. It is the
+// storage-friendly form of RefreshToken.Verify: after ParseRefreshToken yields
+// the id and secret and you load the record by id, pass the record's stored
+// hash and expiry straight in. It returns ErrRefreshMismatch before
+// ErrRefreshExpired, matching RefreshToken.Verify. A zero expiresAt means no
+// expiry check.
+func VerifyRefreshSecret(storedHash string, expiresAt time.Time, secret string) error {
+	if subtle.ConstantTimeCompare([]byte(hashSecret(secret)), []byte(storedHash)) != 1 {
 		return ErrRefreshMismatch
 	}
-	if !rt.ExpiresAt.IsZero() && time.Now().After(rt.ExpiresAt) {
+	if !expiresAt.IsZero() && time.Now().After(expiresAt) {
 		return ErrRefreshExpired
 	}
 	return nil
