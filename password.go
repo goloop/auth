@@ -200,8 +200,19 @@ func (h *pbkdf2Hasher) NeedsRehash(encoded string) bool {
 //
 // The result is deliberately discarded: there is nothing to learn from
 // verifying a password against a hash of something else.
+//
+// A missing decoy does not silence it. When the decoy is empty - the decoy
+// was never built at startup, which is the one misconfiguration this helper
+// is most likely to meet - the cost is spent by hashing the password instead,
+// which does the same KDF work. A helper that quietly did nothing in exactly
+// that case would reopen the oracle it exists to close, and reopen it only
+// on the misconfigured deployments, where nobody is measuring.
 func BurnVerify(h PasswordHasher, decoyHash string, password []byte) {
-	if h == nil || decoyHash == "" {
+	if h == nil {
+		return
+	}
+	if decoyHash == "" {
+		_, _ = h.Hash(password)
 		return
 	}
 	_ = h.Verify(decoyHash, password)

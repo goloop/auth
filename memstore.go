@@ -43,7 +43,17 @@ type MemoryRefreshStore struct {
 
 	grace func() time.Duration
 	now   func() time.Time
+
+	// lastSweep is when dead records were last reaped. Without reaping,
+	// every expired token and every abandoned chain stays in memory for the
+	// life of the process - and a long life is this store's stated use case.
+	lastSweep time.Time
 }
+
+// sweepEvery is how often the lazy sweep walks the maps. Mutations between
+// sweeps still check expiry on the records they touch, so this only bounds
+// how long an untouched dead record can linger.
+const sweepEvery = time.Minute
 
 // rotatedRecord remembers one rotation for as long as the grace window lasts.
 type rotatedRecord struct {
@@ -105,8 +115,55 @@ var (
 func (s *MemoryRefreshStore) Save(_ context.Context, rt RefreshToken) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweep()
 	s.save(rt)
 	return nil
+}
+
+// expired reports whether a record is past its ExpiresAt. A zero ExpiresAt
+// means no expiry, matching VerifyRefreshSecret.
+func (s *MemoryRefreshStore) expired(rt RefreshToken) bool {
+	return !rt.ExpiresAt.IsZero() && s.now().After(rt.ExpiresAt)
+}
+
+// sweep reaps what can no longer matter: expired tokens, and grace records
+// older than the window. It runs at most once per sweepEvery, under the lock
+// the caller already holds.
+func (s *MemoryRefreshStore) sweep() {
+	now := s.now()
+	if now.Sub(s.lastSweep) < sweepEvery {
+		return
+	}
+	s.lastSweep = now
+
+	for id, rt := range s.tokens {
+		if s.expired(rt) {
+			s.remove(id, rt.Subject)
+		}
+	}
+
+	window := s.grace()
+	for id, rec := range s.previous {
+		if window <= 0 || now.Sub(rec.at) > window {
+			delete(s.previous, id)
+		}
+	}
+	for successor, pred := range s.graceOf {
+		if _, ok := s.previous[pred]; !ok {
+			delete(s.graceOf, successor)
+		}
+	}
+}
+
+// remove drops one token and its index entry. The caller holds the lock.
+func (s *MemoryRefreshStore) remove(id, subject string) {
+	delete(s.tokens, id)
+	if ids := s.bySubject[subject]; ids != nil {
+		delete(ids, id)
+		if len(ids) == 0 {
+			delete(s.bySubject, subject)
+		}
+	}
 }
 
 // save records a token and indexes it. The caller holds the lock.
@@ -119,12 +176,18 @@ func (s *MemoryRefreshStore) save(rt RefreshToken) {
 }
 
 // Get returns the record for an id, or ErrInvalidToken when there is none.
+// An expired record counts as none: it is reaped on the way, so a session
+// list never shows sessions that ended by themselves.
 func (s *MemoryRefreshStore) Get(_ context.Context, id string) (RefreshToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	rt, ok := s.tokens[id]
 	if !ok {
+		return RefreshToken{}, ErrInvalidToken
+	}
+	if s.expired(rt) {
+		s.remove(id, rt.Subject)
 		return RefreshToken{}, ErrInvalidToken
 	}
 	return rt, nil
@@ -146,6 +209,12 @@ func (s *MemoryRefreshStore) RotateChecked(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// The sweep runs after the answer is decided, not before. Run first, it
+	// would reap the very record this call is about, and an expired token
+	// would be answered with the reuse signal - which ends the subject's
+	// other sessions over a client that was merely idle.
+	defer s.sweep()
+
 	old, ok := s.tokens[oldID]
 	if !ok {
 		// The token is not current. It may still be the one rotated a
@@ -155,29 +224,42 @@ func (s *MemoryRefreshStore) RotateChecked(
 		if rec, seen := s.previous[oldID]; seen {
 			if window := s.grace(); window > 0 &&
 				s.now().Sub(rec.at) <= window {
-				return RotateResult{Status: PreviousWithinGrace}, ErrRefreshUsed
+				return RotateResult{
+					Status:  PreviousWithinGrace,
+					Subject: rec.subject,
+				}, ErrRefreshUsed
 			}
 		}
 		return RotateResult{Status: ReusedStale}, ErrRefreshUsed
+	}
+
+	// A record past its expiry is a dead token, not a live one that happens
+	// to still be in the map. Rotating it would extend a session the clock
+	// already ended - and expiry is the one revocation that happens without
+	// anyone calling Revoke. It is not reuse either: expiring is what every
+	// honest token eventually does, and answering with the reuse signal
+	// would end the subject's other sessions over an idle client.
+	if s.expired(old) {
+		s.remove(oldID, old.Subject)
+		s.dropGrace(oldID)
+		return RotateResult{Subject: old.Subject}, ErrRefreshExpired
 	}
 
 	// Whatever this token replaced is now two rotations back, so its grace
 	// is over: only one token per chain can be the one a lost response
 	// would return.
 	s.dropGrace(oldID)
+	s.remove(oldID, old.Subject)
 
-	delete(s.tokens, oldID)
-	if ids := s.bySubject[old.Subject]; ids != nil {
-		delete(ids, oldID)
-		if len(ids) == 0 {
-			delete(s.bySubject, old.Subject)
-		}
+	// The rotation is remembered only when a window exists to remember it
+	// for. With grace disabled the record would never be read, only kept.
+	if s.grace() > 0 {
+		s.previous[oldID] = rotatedRecord{subject: old.Subject, at: s.now()}
+		s.graceOf[next.ID] = oldID
 	}
-	s.previous[oldID] = rotatedRecord{subject: old.Subject, at: s.now()}
-	s.graceOf[next.ID] = oldID
 	s.save(next)
 
-	return RotateResult{Status: Rotated}, nil
+	return RotateResult{Status: Rotated, Subject: old.Subject}, nil
 }
 
 // dropGrace ends the grace of whatever id replaced. The caller holds the lock.
@@ -193,6 +275,7 @@ func (s *MemoryRefreshStore) dropGrace(id string) {
 func (s *MemoryRefreshStore) Revoke(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweep()
 
 	// A revoked token is never a repeat: whatever the client thinks, the
 	// answer to presenting it again is reuse. This comes first because the
@@ -209,13 +292,7 @@ func (s *MemoryRefreshStore) Revoke(_ context.Context, id string) error {
 	if !ok {
 		return nil
 	}
-	delete(s.tokens, id)
-	if ids := s.bySubject[rt.Subject]; ids != nil {
-		delete(ids, id)
-		if len(ids) == 0 {
-			delete(s.bySubject, rt.Subject)
-		}
-	}
+	s.remove(id, rt.Subject)
 	return nil
 }
 

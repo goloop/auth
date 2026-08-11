@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-11
+
+Minor release: a security review of the v0.5.0-v0.6.0 refresh work, with the
+four things it found fixed. One of them renumbers `RotateStatus` - read that
+item before upgrading code that stores the numeric values (in-memory use is
+unaffected).
+
+### Fixed
+- `MemoryRefreshStore` now enforces `ExpiresAt`. Until now an expired record
+  stayed in the map forever, `Get` returned it, and `Rotate` happily issued a
+  successor for it - so a caller that skipped the Verify step could extend a
+  session the clock had ended a month earlier. Rotating an expired token now
+  fails with `ErrRefreshExpired`, deliberately not `ErrRefreshUsed`: expiring
+  is what every honest token eventually does, and answering with the reuse
+  signal would revoke an idle user's other sessions as if they were a thief.
+  `Get` treats an expired record as absent.
+- The store also reaps: expired tokens and grace records past their window are
+  dropped by a throttled sweep on mutations, and with grace disabled no
+  rotation records are kept at all. Until now every expired token and every
+  abandoned chain stayed in memory for the life of the process - and a long
+  life is this store's stated use case.
+- `BurnVerify` with an empty decoy now spends the cost by hashing the password
+  instead of silently returning. The empty decoy is the misconfiguration the
+  helper is most likely to meet - the decoy never built at startup - and a
+  guard that quietly does nothing in exactly that case reopens the timing
+  oracle only on the deployments that got the setup wrong, where nobody is
+  measuring.
+
+### Changed
+- **`RotateUnknown` is the new zero value of `RotateStatus`**; `Rotated`,
+  `PreviousWithinGrace` and `ReusedStale` shift up by one. The zero value used
+  to be `Rotated`, so a `RotateResult{}` returned alongside an infrastructure
+  error read as a successful rotation to any caller that checked the status
+  before the error. Code comparing against the named constants is unaffected;
+  only stored numeric values would notice, and the constants are days old.
+  `String` on an unknown value now says "unknown" rather than "rotated".
+- `PreviousWithinGrace` is documented for what it is and is not: the id
+  matched the immediately previous token, and nothing verified the presented
+  secret - the record it would be checked against is already gone. It means
+  "answer 401 without punishing the family", never "the bearer is
+  authenticated". An id is not a secret.
+
+### Added
+- `RotateResult.Subject` names whose token was involved, when the store can
+  still say. It exists for the response to `ReusedStale`: revoking the
+  subject's other sessions needs a subject, and at detection time the caller
+  may have nothing left to look one up with. Empty when the store no longer
+  knows; the fallback path never fills it.
+- The conformance suite gained "an expired token cannot rotate". The exact
+  error is the store's to choose - expired and reused are both refusals - but
+  success is not among the options, and a store that extends dead sessions now
+  fails its conformance run.
+
 ## [0.6.0] - 2026-08-11
 
 Minor release: a way to prove a refresh store is correct.

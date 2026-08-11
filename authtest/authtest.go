@@ -67,6 +67,9 @@ func RefreshStore(t *testing.T, newStore NewStore) {
 	t.Run("rotation is atomic", func(t *testing.T) {
 		checkAtomic(t, newStore(t))
 	})
+	t.Run("an expired token cannot rotate", func(t *testing.T) {
+		checkExpired(t, newStore(t))
+	})
 
 	// The optional halves, each checked only where it is offered.
 	store := newStore(t)
@@ -222,6 +225,30 @@ func checkAtomic(t *testing.T, s auth.RefreshStore) {
 	}
 	for _, err := range other {
 		t.Errorf("a losing rotation returned %v, want auth.ErrRefreshUsed", err)
+	}
+}
+
+// checkExpired proves the store will not extend a session the clock already
+// ended. Expiry is the one revocation that happens without anyone calling
+// Revoke, and the caller most likely to skip the Verify step is the one whose
+// store must catch it. The exact error is the store's to choose - expired and
+// reused are both refusals - but success is not among the options.
+func checkExpired(t *testing.T, s auth.RefreshStore) {
+	ctx := context.Background()
+
+	rt, _, err := auth.NewRefreshToken("u1", time.Nanosecond)
+	if err != nil {
+		t.Fatalf("auth.NewRefreshToken: %v", err)
+	}
+	save(t, s, rt)
+
+	// The nanosecond has passed by now on any clock, but leave no room for
+	// a coarse one.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := s.Rotate(ctx, rt.ID, token(t, "u1")); err == nil {
+		t.Error("an expired token was rotated into a fresh session - the " +
+			"store extended a session the clock had already ended")
 	}
 }
 

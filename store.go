@@ -69,16 +69,34 @@ type GraceRotator interface {
 type RotateStatus int
 
 // The outcomes of a rotation.
+//
+// The zero value is deliberately RotateUnknown, not Rotated. A RotateResult
+// travels next to an error, and the zero value is what a caller sees when the
+// error is the whole story - an unreachable store, an expired token. A zero
+// value that read as success would reward exactly the caller who forgot to
+// check the error first.
 const (
+	// RotateUnknown means no rotation happened and the store made no
+	// judgement about the token: the error alongside says why.
+	RotateUnknown RotateStatus = iota
+
 	// Rotated is a normal rotation: the presented token was current and a
 	// successor was issued.
-	Rotated RotateStatus = iota
+	Rotated
 
 	// PreviousWithinGrace is the token that was rotated immediately before
 	// the current one, presented again within the store's grace window. It
 	// is the signature of a lost response, not of theft: the client never
 	// saw the successor it was given. Only a store that can prove this
 	// reports it.
+	//
+	// IT IS NOT AUTHENTICATION. By the time this is reported, the previous
+	// record - its secret hash included - is gone, so nothing has checked
+	// that the presented secret belongs to that id. All this status says is
+	// "the id matches the immediately previous token": answer 401 without
+	// punishing the family, and never treat the bearer as identified. An id
+	// is not a secret, and a status that suppresses the theft response must
+	// not also confer trust.
 	PreviousWithinGrace
 
 	// ReusedStale is a token that was rotated or revoked earlier than that,
@@ -90,18 +108,29 @@ const (
 // String renders the status for diagnostics.
 func (s RotateStatus) String() string {
 	switch s {
+	case Rotated:
+		return "rotated"
 	case PreviousWithinGrace:
 		return "previous_within_grace"
 	case ReusedStale:
 		return "reused_stale"
+	case RotateUnknown:
+		return "unknown"
 	default:
-		return "rotated"
+		return "unknown"
 	}
 }
 
 // RotateResult is what a rotation attempt produced.
 type RotateResult struct {
 	Status RotateStatus
+
+	// Subject names whose token this was, when the store can still say.
+	// It exists for the response to ReusedStale: revoking the subject's
+	// other sessions needs a subject, and by the time reuse is detected the
+	// caller may have nothing to look one up with. Empty when the store no
+	// longer knows - a plain RefreshStore never fills it.
+	Subject string
 }
 
 // ErrUnsupported is returned by a helper whose store does not implement the
@@ -160,10 +189,14 @@ func RotateWithStatus(
 	err := s.Rotate(ctx, oldID, next)
 	switch {
 	case err == nil:
+		// A plain store cannot say whose token it was; Subject stays empty
+		// rather than guessed.
 		return RotateResult{Status: Rotated}, nil
 	case errors.Is(err, ErrRefreshUsed):
 		return RotateResult{Status: ReusedStale}, err
 	default:
+		// The zero result: no rotation, no judgement, the error is the
+		// whole story.
 		return RotateResult{}, err
 	}
 }

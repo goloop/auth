@@ -106,6 +106,151 @@ func TestRotateWithStatusPassesInfrastructureErrors(t *testing.T) {
 	if errors.Is(err, ErrRefreshUsed) || got.Status == ReusedStale {
 		t.Error("an unreachable store was read as token reuse")
 	}
+	if got.Status != RotateUnknown {
+		t.Errorf("Status = %v, want RotateUnknown - the zero value must not "+
+			"read as success next to an error", got.Status)
+	}
+}
+
+// The zero value of a security status must not spell success: a caller that
+// forgets to check the error first should read "unknown", not "rotated".
+func TestRotateStatusZeroValueIsNotSuccess(t *testing.T) {
+	var zero RotateResult
+	if zero.Status == Rotated {
+		t.Fatal("the zero RotateStatus reads as a successful rotation")
+	}
+	if got := zero.Status.String(); got != "unknown" {
+		t.Errorf("zero status renders as %q, want unknown", got)
+	}
+	if got := RotateStatus(99).String(); got != "unknown" {
+		t.Errorf("an out-of-range status renders as %q, want unknown", got)
+	}
+}
+
+// An expired token is dead, and a dead token neither rotates nor shows up in
+// a session list - even for a caller that skipped the Verify step and went
+// straight to the store.
+func TestMemoryStoreEnforcesExpiry(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	s := NewMemoryRefreshStore(WithMemoryClock(func() time.Time { return now }))
+
+	rt, _, err := NewRefreshToken("u1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, rt); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(2 * time.Minute)
+
+	res, err := RotateWithStatus(ctx, s, rt.ID, newToken(t, "u1"))
+	if !errors.Is(err, ErrRefreshExpired) {
+		t.Fatalf("rotating an expired token = %v, want ErrRefreshExpired - "+
+			"expiry is the one revocation that happens without a call", err)
+	}
+	if errors.Is(err, ErrRefreshUsed) || res.Status == ReusedStale {
+		t.Error("expiry was reported as reuse - an idle client is not a thief")
+	}
+	if res.Subject != "u1" {
+		t.Errorf("Subject = %q, want the owner while the store still knows it",
+			res.Subject)
+	}
+
+	if _, err := Get(ctx, s, rt.ID); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("Get of an expired token = %v, want ErrInvalidToken", err)
+	}
+}
+
+// Dead records must not accumulate for the life of the process: expired
+// tokens and grace records past their window get reaped.
+func TestMemoryStoreReapsDeadRecords(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	s := NewMemoryRefreshStore(
+		WithGrace(10*time.Second),
+		WithMemoryClock(func() time.Time { return now }),
+	)
+
+	// Fifty chains whose clients walk away: rotate once, never return.
+	for range 50 {
+		first := newToken(t, "u1")
+		if err := s.Save(ctx, first); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := RotateWithStatus(ctx, s, first.ID, newToken(t, "u1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Well past every expiry and every grace window, one mutation triggers
+	// the sweep.
+	now = now.Add(2 * time.Hour)
+	if err := s.Save(ctx, newToken(t, "sweeper")); err != nil {
+		t.Fatal(err)
+	}
+
+	s.mu.Lock()
+	tokens, previous, grace := len(s.tokens), len(s.previous), len(s.graceOf)
+	s.mu.Unlock()
+
+	if tokens > 1 {
+		t.Errorf("tokens = %d after the sweep, want only the fresh one", tokens)
+	}
+	if previous != 0 || grace != 0 {
+		t.Errorf("previous = %d, graceOf = %d after the sweep, want both empty",
+			previous, grace)
+	}
+}
+
+// With grace disabled there is no window to remember rotations for, so
+// nothing may be kept about them at all.
+func TestMemoryStoreKeepsNoGraceRecordsWhenDisabled(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryRefreshStore()
+
+	first := newToken(t, "u1")
+	if err := s.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RotateWithStatus(ctx, s, first.ID, newToken(t, "u1")); err != nil {
+		t.Fatal(err)
+	}
+
+	s.mu.Lock()
+	previous, grace := len(s.previous), len(s.graceOf)
+	s.mu.Unlock()
+	if previous != 0 || grace != 0 {
+		t.Errorf("previous = %d, graceOf = %d with grace disabled, want both "+
+			"empty - records nobody will read are records that only leak",
+			previous, grace)
+	}
+}
+
+// The subject travels with the result where the store still knows it, so the
+// response to reuse has something to revoke by.
+func TestRotateResultCarriesTheSubject(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryRefreshStore(WithGrace(time.Minute))
+
+	first := newToken(t, "u7")
+	if err := s.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := RotateWithStatus(ctx, s, first.ID, newToken(t, "u7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Subject != "u7" {
+		t.Errorf("Subject on a rotation = %q, want u7", res.Subject)
+	}
+
+	res, _ = RotateWithStatus(ctx, s, first.ID, newToken(t, "u7"))
+	if res.Status != PreviousWithinGrace || res.Subject != "u7" {
+		t.Errorf("grace result = %+v, want the subject alongside", res)
+	}
 }
 
 func TestMemoryStoreRotation(t *testing.T) {

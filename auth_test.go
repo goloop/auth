@@ -456,3 +456,29 @@ func TestBurnVerifyIsSafeToCall(t *testing.T) {
 	BurnVerify(nil, "hash", []byte{}) // hasher not wired yet
 	BurnVerify(h, "not-a-hash", nil)  // malformed decoy
 }
+
+// The one misconfiguration this helper is most likely to meet - a decoy that
+// was never built - must not silence it: that would reopen the oracle only on
+// the deployments that got the setup wrong, where nobody is measuring.
+func TestBurnVerifyBurnsWithoutADecoy(t *testing.T) {
+	h := NewPBKDF2(WithIterations(50000))
+
+	decoy, err := h.Hash([]byte("decoy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	measure := func(f func()) time.Duration {
+		start := time.Now()
+		f()
+		return time.Since(start)
+	}
+
+	withDecoy := measure(func() { BurnVerify(h, decoy, []byte("pw")) })
+	withoutDecoy := measure(func() { BurnVerify(h, "", []byte("pw")) })
+
+	if withoutDecoy < withDecoy/4 {
+		t.Errorf("BurnVerify with no decoy took %v against %v with one - the "+
+			"misconfigured path is the fast path again", withoutDecoy, withDecoy)
+	}
+}
