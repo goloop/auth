@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-11
+
+Minor release: a way to prove a refresh store is correct.
+
+### Added
+- `auth/authtest` runs the refresh-store contract against an implementation:
+  `authtest.RefreshStore(t, newStore)`. It checks what the interfaces promise,
+  concurrency included, and adapts to the optional halves a store implements.
+  The mistakes in this area are subtle, silent and repeated - an index updated
+  in two of the three places that change it, a store outage reported as token
+  reuse, a read and a swap that are not one step - and none of them fails an
+  ordinary sequential test. It is a separate package so importing `auth` never
+  pulls `testing` into a production binary.
+- `DOC.md` and `DOC.UK.md` carry the recipe for a shared store: the atomic Lua
+  rotation, why `del` returning 1 is both the check and the claim, the
+  three-place index rule, the epoch alternative and the trap that comes with
+  it, and the nanosecond precision that trap needs.
+
+### Fixed
+- `MemoryRefreshStore` kept a token inside its grace window after later
+  rotations had moved past it, so a token two or more rotations old was
+  reported as `PreviousWithinGrace` - a client repeating itself - when it could
+  only have been a replay. Only the immediately previous token is in the window
+  now, and revoking the current token ends its predecessor's grace as well.
+  The conformance suite above found this in the reference implementation on its
+  first run, which is a fair summary of why it exists.
+
+### Changed
+- The interface documentation now states what the conformance suite checks and
+  the reference store already did: `Rotate` must be atomic and must not report
+  an unreachable store as token reuse, `Revoke` is idempotent, `Get` returns
+  `ErrInvalidToken` for an unknown id, and a revoked token is never
+  `PreviousWithinGrace`.
+
 ## [0.5.0] - 2026-08-11
 
 Minor release: the parts of a refresh cycle every application was writing for

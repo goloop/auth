@@ -10,6 +10,7 @@ in [DOC.UK.md](DOC.UK.md).
 - [Access tokens](#access-tokens)
 - [Middleware](#middleware)
 - [Refresh tokens](#refresh-tokens)
+- [Writing a shared store](#writing-a-shared-store)
 - [Dependencies](#dependencies)
 - [Scope](#scope)
 
@@ -148,6 +149,78 @@ type RefreshStore interface {
 
 `Rotate` atomically revokes the old token and stores the new one. Implement the
 store over your database.
+
+## Writing a shared store
+
+`MemoryRefreshStore` is for tests and single-process programs. A service with
+more than one instance needs a store the instances share, and that is
+application code - `auth` takes no dependency on a database or a cache.
+
+What the contract asks for is not obvious from the interface alone, so here is
+the whole of it, with the mistakes that keep being made.
+
+**Rotation must be one atomic step.** Read, check and swap cannot be separate
+round trips: two clients presenting the same token at once must produce exactly
+one successor. In Redis that means a script rather than a sequence of commands:
+
+```lua
+-- KEYS[1] the token being rotated, KEYS[2] the successor,
+-- KEYS[3] the subject index.
+-- ARGV[1] the successor record, ARGV[2] old id, ARGV[3] new id, ARGV[4] ttl.
+if redis.call('del', KEYS[1]) == 1 then
+  redis.call('set', KEYS[2], ARGV[1], 'EX', ARGV[4])
+  redis.call('srem', KEYS[3], ARGV[2])
+  redis.call('sadd', KEYS[3], ARGV[3])
+  redis.call('expire', KEYS[3], ARGV[4])
+  return 1
+end
+return 0
+```
+
+The `del` returning 1 is both the check and the claim: whoever deletes the key
+is the one rotation that wins, and everyone else gets 0 and `ErrRefreshUsed`.
+Two commands - a `get` then a `del` - leave a window where both clients pass
+the check.
+
+**The subject index is maintained in three places.** `Save`, `Rotate` and
+`Revoke` all change which tokens a subject has. Update it in two of the three
+and `RevokeAll` reports success while a session keeps running - the worst
+possible outcome for a button labelled "sign out everywhere". Give the index at
+least the ttl of the longest token it holds, or it expires first and the
+tokens outlive their own index.
+
+**A store that could not be reached has decided nothing.** Return the
+infrastructure error as itself. `ErrRefreshUsed` is a statement about the
+token, and a caller that treats it as one will end every session the subject
+has - over a network blip.
+
+**An epoch instead of an index** is a reasonable alternative: one timestamp per
+subject, and a token is dead if it was issued before it. It avoids the
+three-place index entirely, and it has one trap. The epoch check has to happen
+*inside* the same atomic operation as the swap. Checked separately, a revoked
+token passes the check, swaps itself for a successor stamped after the epoch,
+and the whole family comes back. Keep the epoch at nanosecond precision too: at
+one-second resolution a token issued 200ms before a password reset compares as
+newer and survives, and that is exactly the token that was in the attacker's
+hands.
+
+**Then prove it.** `auth/authtest` runs the contract against an
+implementation, including the concurrency:
+
+```go
+func TestRedisStore(t *testing.T) {
+    authtest.RefreshStore(t, func(t *testing.T) auth.RefreshStore {
+        s := newRedisStore(t, redisURL)
+        t.Cleanup(func() { s.flush() })
+        return s
+    })
+}
+```
+
+It checks the optional interfaces the store implements and skips the ones it
+does not. Every one of the mistakes above has a check, including the ones that
+pass a single sequential run: a store whose rotation is not atomic fails on the
+concurrency check, and one whose index misses `Rotate` fails on `RevokeAll`.
 
 ## Dependencies
 

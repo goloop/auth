@@ -73,6 +73,13 @@
 // single-process programs, and it doubles as an executable statement of what
 // the grace window means.
 //
+// A service with more than one instance needs a store those instances share,
+// and that is application code: auth takes no dependency on a database or a
+// cache. The auth/authtest subpackage runs the contract against whatever is
+// written, concurrency included, so a store can be proven rather than hoped
+// for; DOC.md carries the recipe, including the atomic rotation script and the
+// mistakes it exists to prevent.
+//
 // A store that keeps a revocation epoch per subject rather than an index is a
 // reasonable alternative, and it has one trap worth naming: the epoch check
 // must happen inside the same atomic operation as the token swap. Checked

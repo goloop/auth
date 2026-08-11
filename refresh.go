@@ -141,13 +141,32 @@ func hashSecret(secret string) string {
 
 // RefreshStore persists refresh tokens. Implementations live in the application
 // (for example over a database); auth defines only the contract.
+//
+// The authtest subpackage runs a conformance suite against an implementation,
+// including the concurrency the wording below implies. Rotation is where the
+// subtle bugs in this area live, and they are the kind that pass a single
+// -count=1 run.
 type RefreshStore interface {
 	// Save stores a new refresh token.
 	Save(ctx context.Context, rt RefreshToken) error
+
 	// Rotate atomically revokes oldID and stores next. When oldID was
 	// already rotated or revoked, implementations return ErrRefreshUsed so
 	// the caller can respond to token reuse.
+	//
+	// Atomically is the load-bearing word: read, check and swap have to be
+	// one step. Two clients presenting the same token at once must produce
+	// exactly one successor, or a stolen token races a legitimate one and
+	// both win.
+	//
+	// A store that could not be reached has decided nothing, and must
+	// report that as its own error. ErrRefreshUsed is a statement about the
+	// token, and returning it for an outage ends sessions over a network
+	// blip.
 	Rotate(ctx context.Context, oldID string, next RefreshToken) error
-	// Revoke removes a refresh token by id.
+
+	// Revoke removes a refresh token by id. Revoking an id that is not
+	// there is not an error: the goal is that the token cannot be used, and
+	// it cannot. Signing out is not a place for a race to surface.
 	Revoke(ctx context.Context, id string) error
 }

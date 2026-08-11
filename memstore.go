@@ -29,10 +29,17 @@ type MemoryRefreshStore struct {
 	tokens    map[string]RefreshToken
 	bySubject map[string]map[string]bool
 
-	// previous maps the id of a token that was just rotated to the record
-	// that replaced it, so a client repeating a rotation it never saw the
-	// answer to can be told apart from a replay of something older.
+	// previous holds the id of the token each chain rotated away most
+	// recently, so a client repeating a rotation it never saw the answer to
+	// can be told apart from a replay of something older. graceOf points the
+	// other way, from a successor to the id it replaced, which is what makes
+	// dropping a stale entry an O(1) step rather than a scan.
+	//
+	// Only the immediately previous token may be in here. A token two
+	// rotations back is not what a lost response returns; leaving it would
+	// classify a replay as benign for the whole window.
 	previous map[string]rotatedRecord
+	graceOf  map[string]string
 
 	grace func() time.Duration
 	now   func() time.Time
@@ -76,6 +83,7 @@ func NewMemoryRefreshStore(opts ...MemoryOption) *MemoryRefreshStore {
 		tokens:    map[string]RefreshToken{},
 		bySubject: map[string]map[string]bool{},
 		previous:  map[string]rotatedRecord{},
+		graceOf:   map[string]string{},
 		grace:     func() time.Duration { return 0 },
 		now:       time.Now,
 	}
@@ -153,6 +161,11 @@ func (s *MemoryRefreshStore) RotateChecked(
 		return RotateResult{Status: ReusedStale}, ErrRefreshUsed
 	}
 
+	// Whatever this token replaced is now two rotations back, so its grace
+	// is over: only one token per chain can be the one a lost response
+	// would return.
+	s.dropGrace(oldID)
+
 	delete(s.tokens, oldID)
 	if ids := s.bySubject[old.Subject]; ids != nil {
 		delete(ids, oldID)
@@ -161,9 +174,18 @@ func (s *MemoryRefreshStore) RotateChecked(
 		}
 	}
 	s.previous[oldID] = rotatedRecord{subject: old.Subject, at: s.now()}
+	s.graceOf[next.ID] = oldID
 	s.save(next)
 
 	return RotateResult{Status: Rotated}, nil
+}
+
+// dropGrace ends the grace of whatever id replaced. The caller holds the lock.
+func (s *MemoryRefreshStore) dropGrace(id string) {
+	if pred, ok := s.graceOf[id]; ok {
+		delete(s.previous, pred)
+		delete(s.graceOf, id)
+	}
 }
 
 // Revoke removes a refresh token by id. Revoking an id that is not there is
@@ -177,6 +199,11 @@ func (s *MemoryRefreshStore) Revoke(_ context.Context, id string) error {
 	// id has usually already been rotated away, and that is precisely the
 	// case where a leftover grace record would let a revoked token back in.
 	delete(s.previous, id)
+
+	// Revoking the current token ends the chain, so its predecessor cannot
+	// stay benign either - it would rotate itself a fresh successor and
+	// undo the revocation.
+	s.dropGrace(id)
 
 	rt, ok := s.tokens[id]
 	if !ok {
@@ -207,6 +234,11 @@ func (s *MemoryRefreshStore) RevokeAll(_ context.Context, subject string) error 
 	for id, rec := range s.previous {
 		if rec.subject == subject {
 			delete(s.previous, id)
+		}
+	}
+	for successor, pred := range s.graceOf {
+		if _, ok := s.previous[pred]; !ok {
+			delete(s.graceOf, successor)
 		}
 	}
 	return nil

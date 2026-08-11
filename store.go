@@ -26,6 +26,10 @@ import (
 // enough that the lookup belongs in the contract, even if it cannot be added
 // to the required half without breaking the stores that exist.
 type RefreshStoreGetter interface {
+	// Get returns the record for an id. When there is no such record it
+	// returns ErrInvalidToken, so a caller can tell "no such token" from
+	// "the store could not answer" - which are the same thing to a user and
+	// opposite things to an operator.
 	Get(ctx context.Context, id string) (RefreshToken, error)
 }
 
@@ -50,6 +54,14 @@ type RefreshStoreAllRevoker interface {
 // keeps enough history to see the difference implements this; one that does
 // not simply is not asked.
 type GraceRotator interface {
+	// RotateChecked rotates and reports what the attempt was. It returns
+	// ErrRefreshUsed alongside both PreviousWithinGrace and ReusedStale:
+	// neither issued a successor, and the status says how to react rather
+	// than whether the call worked.
+	//
+	// A revoked token is never PreviousWithinGrace. Revocation is a
+	// decision, and a grace window that outlives it hands a revoked token
+	// one more use - which is the use an attacker needs.
 	RotateChecked(ctx context.Context, oldID string, next RefreshToken) (RotateResult, error)
 }
 
