@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-08-11
+
+Patch release: the reference catches up with v0.5.0-v0.7.0.
+
+### Documentation
+- `DOC.md` and `DOC.UK.md` now cover the optional store interfaces and their
+  helpers, the `RotateWithStatus` status table with `RotateUnknown` as the
+  zero value, the hard limits of `PreviousWithinGrace`, the in-memory
+  reference with its expiry enforcement, and `BurnVerify` with the decoy
+  rules. Until now these lived only in the godoc.
+
 ## [0.7.0] - 2026-08-11
 
 Minor release: a security review of the v0.5.0-v0.6.0 refresh work, with the

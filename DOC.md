@@ -68,6 +68,31 @@ if err := h.Verify(stored, pw); err == nil {
 To use Argon2id, implement `PasswordHasher` in your application (accepting the
 `golang.org/x/crypto` dependency there); `auth` stays dependency-clean.
 
+### Not saying who exists
+
+A login that hashes only when the account exists answers "no such account" two
+orders of magnitude faster than "wrong password", and identical error messages
+do not hide it: the endpoint becomes a list of registered addresses, readable
+with a stopwatch. `BurnVerify` spends the same work on the missing-account
+branch:
+
+```go
+var decoy string // built once at startup: hasher.Hash(randomBytes)
+
+u, err := repo.ByEmail(ctx, email)
+if errors.Is(err, sql.ErrNoRows) {
+    auth.BurnVerify(hasher, decoy, []byte(password))
+    return ErrInvalidCredentials
+}
+```
+
+The decoy must come from the same hasher with the same settings, or the two
+branches cost different amounts again; `NeedsRehash` keeps a long-lived decoy
+in step. With an empty decoy the helper hashes the password instead of silently
+returning, so the misconfigured deployment is not the one where the oracle
+reopens. It levels this one difference and nothing else - rate limiting and
+uniform replies are still yours.
+
 ## Access tokens
 
 ```go
@@ -148,7 +173,54 @@ type RefreshStore interface {
 ```
 
 `Rotate` atomically revokes the old token and stores the new one. Implement the
-store over your database.
+store over your database. Every record carries `IssuedAt` alongside
+`ExpiresAt`, both from one clock reading - which is what a session list and a
+"revoke everything issued before the password change" both need.
+
+### The optional halves
+
+Three things a full refresh cycle needs are optional interfaces beside the
+required contract, each with a package function that works either way and
+returns `ErrUnsupported` when the store does not offer it:
+
+```go
+rec, err := auth.Get(ctx, store, id)          // RefreshStoreGetter
+err = auth.RevokeAll(ctx, store, subject)     // RefreshStoreAllRevoker
+res, err := auth.RotateWithStatus(ctx, store, oldID, next) // GraceRotator
+```
+
+`RotateWithStatus` reports what the attempt was:
+
+| Status | Meaning | Respond with |
+|---|---|---|
+| `Rotated` | the token was current; a successor was issued | the new pair |
+| `PreviousWithinGrace` | the immediately previous token, again, within the window | 401; do not punish |
+| `ReusedStale` | an older or revoked token | revoke the family |
+| `RotateUnknown` | no judgement; the error is the whole story | handle the error |
+
+The zero value is `RotateUnknown`, deliberately: a result travels next to an
+error, and a zero that read as success would reward exactly the caller who
+checked the status first. `RotateResult.Subject` names the owner when the store
+still knows it, so the response to `ReusedStale` has something to revoke by.
+
+`PreviousWithinGrace` is not authentication. By the time it is reported the
+previous record - its secret hash included - is gone, so nothing has verified
+that the presented secret belongs to that id. It means "a client whose
+connection dropped is repeating itself; answer 401 without revoking the
+family", never "the bearer is who they claim".
+
+On a store without `GraceRotator`, `RotateWithStatus` never invents a grace:
+success maps to `Rotated` and `ErrRefreshUsed` to `ReusedStale`. A store that
+cannot prove the difference is not made to assert it.
+
+### The in-memory reference
+
+`NewMemoryRefreshStore` implements the whole contract, optional halves
+included, and enforces expiry: an expired token cannot be rotated
+(`ErrRefreshExpired` - deliberately not the reuse signal, since an idle client
+is not a thief), `Get` treats an expired record as absent, and dead records
+are reaped. It is for tests and single-process programs; `WithGrace(d)` opens
+the grace window, which is otherwise off.
 
 ## Writing a shared store
 
