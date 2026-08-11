@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -392,5 +393,20 @@ func TestVerifyRefreshSecret(t *testing.T) {
 	// Consistent with the method form.
 	if VerifyRefreshSecret(rt.Hash, rt.ExpiresAt, secret) != rt.Verify(secret) {
 		t.Fatal("free function and method disagree")
+	}
+}
+
+func TestTokenManagerCheck(t *testing.T) {
+	// Check answers "can this manager issue and verify at all" without
+	// signing anything, so a service can refuse to start on a misconfigured
+	// secret instead of failing every login after a healthy-looking boot.
+	if err := NewTokenManager(secret).Check(); err != nil {
+		t.Fatalf("Check() with a good secret = %v, want nil", err)
+	}
+	if err := NewTokenManager(nil).Check(); !errors.Is(err, jwt.ErrNoKey) {
+		t.Fatalf("Check() with no secret = %v, want jwt.ErrNoKey", err)
+	}
+	if err := NewTokenManager([]byte("short")).Check(); !errors.Is(err, jwt.ErrWeakKey) {
+		t.Fatalf("Check() with a short secret = %v, want jwt.ErrWeakKey", err)
 	}
 }

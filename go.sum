@@ -1,2 +1,4 @@
 github.com/goloop/jwt v1.0.0 h1:okBngdXlP8onZfeT9R8R/vaA5ZMAlM8/zbP29vXKdpQ=
 github.com/goloop/jwt v1.0.0/go.mod h1:fGj5uWlhx4GVoiEbPTDGIlEDWHoKM0gTyZOrAkcGOow=
+github.com/goloop/jwt v1.1.0 h1:3EH94VmWiFo7cUt7d6AmSFkOu2eD9tI5WQYzcBlfpLA=
+github.com/goloop/jwt v1.1.0/go.mod h1:fGj5uWlhx4GVoiEbPTDGIlEDWHoKM0gTyZOrAkcGOow=

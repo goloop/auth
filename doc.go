@@ -26,7 +26,9 @@
 //	sub, err := tm.Verify(token)
 //
 // Tokens are HS256 JWTs (see goloop/jwt): mandatory expiry, constant-time
-// verification, strict algorithm.
+// verification, strict algorithm. The secret must be at least 32 bytes;
+// TokenManager.Check reports a missing or weak one up front, so a service can
+// refuse to start instead of failing every login after a healthy-looking boot.
 //
 // # Middleware
 //

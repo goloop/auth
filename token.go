@@ -59,8 +59,9 @@ func WithClock(now func() time.Time) TokenOption {
 
 // NewTokenManager creates a TokenManager with the given HMAC secret. The secret
 // must be at least 32 bytes (the HS256 minimum); a shorter one makes Issue and
-// Verify fail with jwt.ErrWeakKey. The secret is copied, so the caller may reuse
-// or zero its slice afterwards.
+// Verify fail with jwt.ErrWeakKey, and [TokenManager.Check] reports the same
+// verdict up front for a service that wants to fail at startup. The secret is
+// copied, so the caller may reuse or zero its slice afterwards.
 func NewTokenManager(secret []byte, opts ...TokenOption) *TokenManager {
 	m := &TokenManager{
 		secret: append([]byte(nil), secret...),
@@ -71,6 +72,21 @@ func NewTokenManager(secret []byte, opts ...TokenOption) *TokenManager {
 		o(m)
 	}
 	return m
+}
+
+// Check reports whether the manager holds a secret that Issue and Verify will
+// accept: [jwt.ErrNoKey] when it is empty, [jwt.ErrWeakKey] when it is shorter
+// than 32 bytes, nil otherwise. It exists so a service can refuse to start on a
+// misconfigured secret instead of starting "healthy" and failing every login:
+//
+//	if err := tm.Check(); err != nil {
+//	    log.Fatal(err)
+//	}
+//
+// It validates the secret and nothing else - it is not a health check, probes
+// no dependency, and signs no token.
+func (m *TokenManager) Check() error {
+	return jwt.CheckKey(m.secret)
 }
 
 // Issue signs an access token for the subject. The subject id must be set.
