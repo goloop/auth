@@ -410,3 +410,49 @@ func TestTokenManagerCheck(t *testing.T) {
 		t.Fatalf("Check() with a short secret = %v, want jwt.ErrWeakKey", err)
 	}
 }
+
+// The oracle this closes is a difference in cost, not in wording: a login that
+// hashes only when the account exists answers "no such account" two orders of
+// magnitude faster, and that difference is a list of registered addresses.
+func TestBurnVerifySpendsTheSameWork(t *testing.T) {
+	h := NewPBKDF2(WithIterations(50000))
+
+	decoy, err := h.Hash([]byte("a decoy nobody signs in with"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, err := h.Hash([]byte("correct horse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	measure := func(f func()) time.Duration {
+		start := time.Now()
+		f()
+		return time.Since(start)
+	}
+
+	wrongPassword := measure(func() {
+		_ = h.Verify(real, []byte("wrong"))
+	})
+	noSuchUser := measure(func() {
+		BurnVerify(h, decoy, []byte("wrong"))
+	})
+
+	// Wall-clock comparisons are noisy, so this asserts the only thing worth
+	// asserting: the burn is the same order of magnitude, not the thousandth
+	// of a second an early return costs.
+	if noSuchUser < wrongPassword/4 {
+		t.Errorf("BurnVerify took %v against %v for a real check - the "+
+			"timing oracle is still open", noSuchUser, wrongPassword)
+	}
+}
+
+// It must never report success, and must not panic on the values a caller can
+// realistically get wrong at startup.
+func TestBurnVerifyIsSafeToCall(t *testing.T) {
+	h := NewPBKDF2(WithIterations(1000))
+	BurnVerify(h, "", []byte("pw"))   // decoy not built yet
+	BurnVerify(nil, "hash", []byte{}) // hasher not wired yet
+	BurnVerify(h, "not-a-hash", nil)  // malformed decoy
+}

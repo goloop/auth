@@ -50,5 +50,46 @@
 // RefreshStore is the persistence contract (Save/Rotate/Revoke); the
 // implementation lives in your application.
 //
+// # Refresh tokens and the optional half of the store contract
+//
+// RefreshStore is what a store must implement. Three things a full refresh
+// cycle turns out to need are optional interfaces beside it, each with a
+// package function that works either way:
+//
+//   - RefreshStoreGetter and Get, because verifying a presented token means
+//     loading the record its id names;
+//   - RefreshStoreAllRevoker and RevokeAll, the only answer to a stolen token
+//     and to "sign me out everywhere". It needs an index from subject to token
+//     ids, maintained in Save, Rotate AND Revoke - miss one of the three and
+//     the button exists while the session survives it;
+//   - GraceRotator and RotateWithStatus, which tell a client repeating a
+//     rotation it never saw the answer to from an attacker replaying an older
+//     token. Both present a token that is no longer current; only a store that
+//     keeps enough history can tell them apart, and one that cannot is never
+//     asked to guess - RotateWithStatus reports ReusedStale, never
+//     PreviousWithinGrace.
+//
+// NewMemoryRefreshStore implements all of them. It is for tests and
+// single-process programs, and it doubles as an executable statement of what
+// the grace window means.
+//
+// A store that keeps a revocation epoch per subject rather than an index is a
+// reasonable alternative, and it has one trap worth naming: the epoch check
+// must happen inside the same atomic operation as the token swap. Checked
+// separately, a revoked token can pass the check, swap itself for a successor
+// stamped after the epoch, and bring the whole family back. Keep the epoch at
+// nanosecond precision too, or a token issued a fraction of a second before a
+// password reset compares as newer and survives - which is exactly the token
+// that was in the attacker's hands.
+//
+// # Logging in without saying who exists
+//
+// BurnVerify spends a password check on the branch where the account does not
+// exist, so that branch costs what a wrong password costs. Without it the two
+// differ by two orders of magnitude, identical error messages notwithstanding,
+// and the endpoint becomes a list of registered addresses. It is not the whole
+// answer - rate limiting and uniform replies are still yours - and its
+// documentation says so plainly.
+//
 // See DOC.md (English) and DOC.UK.md (Ukrainian) for the full reference.
 package auth

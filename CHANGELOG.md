@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-11
+
+Minor release: the parts of a refresh cycle every application was writing for
+itself. All additive - `RefreshStore` is unchanged, so existing stores keep
+working untouched.
+
+### Added
+- `RefreshToken.IssuedAt`. The library already read the clock to compute
+  `ExpiresAt` and threw the reading away, leaving every application that wants
+  "sign out everywhere" or a session list to keep the same value alongside.
+  Deriving it from `ExpiresAt` is not equivalent: the TTL lives in
+  configuration and changes between issues. Both stamps now come from one
+  reading, so `ExpiresAt.Sub(IssuedAt)` is exactly the ttl asked for.
+- `RefreshStoreGetter` + `Get`, `RefreshStoreAllRevoker` + `RevokeAll`,
+  `GraceRotator` + `RotateWithStatus`: the three things a full refresh cycle
+  needs beyond the required contract, as optional interfaces so that no
+  existing store has to change. Each helper returns `ErrUnsupported` rather
+  than pretending to have done the work.
+- `RotateStatus` distinguishes a client repeating a rotation whose response it
+  never received from an attacker replaying an older token. Both present a
+  token that is no longer current, so a plain `Rotate` cannot tell them apart.
+  A store that cannot prove the difference is never made to assert it:
+  `RotateWithStatus` falls back to `ReusedStale` and never invents a grace.
+- `NewMemoryRefreshStore` implements the whole contract, optional halves
+  included, with rotation as one locked read-check-swap. It is for tests and
+  single-process programs, and it is where the grace window's rules are
+  readable rather than described.
+- `BurnVerify` spends a password check on the "no such account" branch. Without
+  it that branch answers two orders of magnitude faster than a wrong password,
+  and identical error messages do not hide it: the endpoint tells anyone with a
+  stopwatch which addresses are registered. Its documentation is explicit that
+  this is not the whole answer to enumeration.
+
+### Documentation
+- The package documentation states the invariants that cost people bugs: the
+  subject index must be maintained in `Save`, `Rotate` and `Revoke` together,
+  and an epoch-based store must check the epoch inside the same atomic
+  operation as the swap - otherwise a revoked token rotates itself a successor
+  stamped after the epoch and the family comes back.
+
 ## [0.3.0] - 2026-07-12
 
 ### Added

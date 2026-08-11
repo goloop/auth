@@ -13,9 +13,23 @@ import (
 // RefreshToken is the server-side record of a refresh token. Only the Hash is
 // stored; the client holds the secret. Persist these in a RefreshStore.
 type RefreshToken struct {
-	ID        string
-	Subject   string
-	Hash      string // hex SHA-256 of the secret; safe to store
+	ID      string
+	Subject string
+	Hash    string // hex SHA-256 of the secret; safe to store
+
+	// IssuedAt is when the token was minted. It answers the one question a
+	// session list and a "sign out everywhere" both need: was this token
+	// handed out before the event that should have ended it - a password
+	// change, a suspected theft - or after.
+	//
+	// Deriving it from ExpiresAt is not the same thing. That would subtract a
+	// TTL that lives in configuration and changes between issues, so a token
+	// minted yesterday under a different setting would report a time it never
+	// had, and a revocation cut-off would miss or over-reach.
+	//
+	// A record read back from a store written before this field existed has
+	// the zero time here.
+	IssuedAt  time.Time
 	ExpiresAt time.Time
 }
 
@@ -42,11 +56,17 @@ func NewRefreshToken(subject string, ttl time.Duration) (RefreshToken, string, e
 	id := hex.EncodeToString(idBytes)
 	secret := hex.EncodeToString(secretBytes)
 
+	// Both stamps come from one reading of the clock, so that
+	// ExpiresAt.Sub(IssuedAt) is exactly the ttl asked for. Two readings
+	// would differ by the time in between, and the next person to notice
+	// would go looking for a bug that is not there.
+	issued := time.Now().UTC()
 	rt := RefreshToken{
 		ID:        id,
 		Subject:   subject,
 		Hash:      hashSecret(secret),
-		ExpiresAt: time.Now().Add(ttl),
+		IssuedAt:  issued,
+		ExpiresAt: issued.Add(ttl),
 	}
 	return rt, id + "." + secret, nil
 }

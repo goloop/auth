@@ -164,3 +164,45 @@ func (h *pbkdf2Hasher) NeedsRehash(encoded string) bool {
 		len(salt) < h.saltLength ||
 		len(digest) < h.keyLength
 }
+
+// BurnVerify spends the cost of a password check without having a user to
+// check against. Call it on the branch where the account does not exist:
+//
+//	u, err := repo.ByEmail(ctx, email)
+//	if errors.Is(err, sql.ErrNoRows) {
+//	    auth.BurnVerify(hasher, decoy, []byte(password))
+//	    return ErrInvalidCredentials
+//	}
+//
+// Without it, a login endpoint answers "no such account" in a millisecond and
+// "wrong password" in a hundred, because only the second one hashes anything.
+// The messages can be identical and the difference is still there, on a
+// stopwatch, and it turns the endpoint into a list of which addresses are
+// registered.
+//
+// The decoy is an encoded hash of anything, produced once at startup by the
+// same hasher with the same settings:
+//
+//	decoy, _ := hasher.Hash([]byte(randomString()))
+//
+// It has to come from the same settings as the real hashes, or the two
+// branches cost different amounts again and the oracle comes back through the
+// side door. [Rehasher.NeedsRehash] reports when a stored hash has fallen
+// behind the current settings, which is the way to keep a long-lived decoy
+// honest.
+//
+// THIS IS NOT ENOUGH ON ITS OWN. It levels the coarse difference between "no
+// such user" and "wrong password", and it does nothing about rate limiting,
+// about replies that differ in wording or status, or about timing that varies
+// with the work done after a successful check. Treating it as the whole answer
+// to enumeration is worse than not having it, because it feels like the
+// problem is closed.
+//
+// The result is deliberately discarded: there is nothing to learn from
+// verifying a password against a hash of something else.
+func BurnVerify(h PasswordHasher, decoyHash string, password []byte) {
+	if h == nil || decoyHash == "" {
+		return
+	}
+	_ = h.Verify(decoyHash, password)
+}
