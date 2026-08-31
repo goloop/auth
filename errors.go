@@ -34,4 +34,14 @@ var (
 	// as token reuse: revoke the subject's other sessions and require a
 	// fresh login.
 	ErrRefreshUsed = errors.New("auth: refresh token already used")
+
+	// ErrStore reports that the token store could not be reached or read — an
+	// infrastructure failure, not a bad token. A store implementation wraps its
+	// backend error with this (fmt.Errorf("%w: %v", auth.ErrStore, err)) so a
+	// caller can tell the two apart with errors.Is. The distinction matters:
+	// a bad or reused token is the user's problem (401, drop the session), but a
+	// momentary store outage is the server's (5xx, retryable, keep the token).
+	// Collapsing an outage into "invalid token" logs every user out over a blip
+	// they would otherwise never notice.
+	ErrStore = errors.New("auth: token store unavailable")
 )
