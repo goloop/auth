@@ -99,6 +99,22 @@ func TestTokenIssueVerify(t *testing.T) {
 	}
 }
 
+func TestTokenVerifyReportsIssuedAt(t *testing.T) {
+	at := time.Unix(1_800_000_000, 0)
+	tm := NewTokenManager(secret, WithTTL(time.Hour), WithClock(func() time.Time { return at }))
+	tok, err := tm.Issue(Subject{ID: "x"})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	got, err := tm.Verify(tok)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !got.IssuedAt.Equal(at) {
+		t.Fatalf("IssuedAt = %v, want %v", got.IssuedAt, at)
+	}
+}
+
 func TestTokenExpiry(t *testing.T) {
 	past := func() time.Time { return time.Now().Add(-2 * time.Hour) }
 	tm := NewTokenManager(secret, WithTTL(time.Hour), WithClock(past))

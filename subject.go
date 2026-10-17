@@ -1,6 +1,9 @@
 package auth
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Subject is the authenticated principal carried in a request context.
 type Subject struct {
@@ -8,6 +11,12 @@ type Subject struct {
 	Email  string
 	Roles  []string
 	Scopes []string
+
+	// IssuedAt is when the access token was minted, filled by Verify (zero
+	// for a subject built by hand, and ignored by Issue). It lets a caller
+	// reject tokens minted before a revocation point - "every session of
+	// this user issued before the ban" - without a server-side token list.
+	IssuedAt time.Time
 }
 
 // HasRole reports whether the subject has the named role.

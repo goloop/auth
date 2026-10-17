@@ -139,11 +139,16 @@ func (m *TokenManager) Verify(token string) (Subject, error) {
 		return Subject{}, ErrInvalidToken
 	}
 
+	var issued time.Time
+	if claims.IssuedAt > 0 {
+		issued = time.Unix(claims.IssuedAt, 0)
+	}
 	return Subject{
-		ID:     claims.Subject,
-		Email:  stringClaim(claims.Extra, "email"),
-		Roles:  stringSliceClaim(claims.Extra, "roles"),
-		Scopes: stringSliceClaim(claims.Extra, "scopes"),
+		ID:       claims.Subject,
+		Email:    stringClaim(claims.Extra, "email"),
+		Roles:    stringSliceClaim(claims.Extra, "roles"),
+		Scopes:   stringSliceClaim(claims.Extra, "scopes"),
+		IssuedAt: issued,
 	}, nil
 }
 

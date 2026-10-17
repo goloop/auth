@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"strings"
 	"time"
 )
 
@@ -85,13 +84,14 @@ const (
 // token must be exactly "id.secret", each a lowercase-hex string of the length
 // NewRefreshToken produces; anything else is ErrMalformedRefresh.
 func ParseRefreshToken(token string) (id, secret string, err error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 ||
-		len(parts[0]) != refreshIDLen || len(parts[1]) != refreshSecretLen ||
-		!isHexString(parts[0]) || !isHexString(parts[1]) {
+	if len(token) != refreshIDLen+1+refreshSecretLen || token[refreshIDLen] != '.' {
 		return "", "", ErrMalformedRefresh
 	}
-	return parts[0], parts[1], nil
+	id, secret = token[:refreshIDLen], token[refreshIDLen+1:]
+	if !isHexString(id) || !isHexString(secret) {
+		return "", "", ErrMalformedRefresh
+	}
+	return id, secret, nil
 }
 
 // isHexString reports whether s is non-empty and all lowercase hex digits,

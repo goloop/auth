@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-10-18
+
+### Changed
+- Parse refresh tokens without allocating temporary fields.
+- Stabilize the existing API in v1.
+
+### Added
+- `Subject.IssuedAt`: `TokenManager.Verify` now reports when the access token
+  was minted (the `iat` claim; zero when absent). A caller can reject tokens
+  issued before a revocation point - every session of a user minted before a
+  ban or a password change - without keeping a server-side token list.
+  Additive: `Issue` ignores the field, existing code is unaffected.
+
 ## [0.7.1] - 2026-08-11
 
 Patch release: the reference catches up with v0.5.0-v0.7.0.

@@ -304,3 +304,7 @@ sibling module) for HS256 token signing. It has no third-party dependencies.
 `auth` does not include: a user repository, RBAC schema, OAuth/OIDC, UI, email
 sending or migrations. It provides crypto, tokens and middleware; you own the
 user and refresh-token tables.
+
+## Release v1.0.0
+
+Parse refresh tokens without allocating and expose access token issue times through Subject.IssuedAt. If iat is absent, IssuedAt is zero; Issue ignores this field. The v1 release keeps the existing import path and public API. Future incompatible changes require a new major version.
