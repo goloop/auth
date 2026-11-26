@@ -245,6 +245,10 @@ func (s *MemoryRefreshStore) RotateChecked(
 		return RotateResult{Subject: old.Subject}, ErrRefreshExpired
 	}
 
+	if old.Subject != next.Subject {
+		return RotateResult{Subject: old.Subject}, ErrRefreshMismatch
+	}
+
 	// Whatever this token replaced is now two rotations back, so its grace
 	// is over: only one token per chain can be the one a lost response
 	// would return.
