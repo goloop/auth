@@ -308,3 +308,7 @@ user and refresh-token tables.
 ## Release v1.0.0
 
 Parse refresh tokens without allocating and expose access token issue times through Subject.IssuedAt. If iat is absent, IssuedAt is zero; Issue ignores this field. The v1 release keeps the existing import path and public API. Future incompatible changes require a new major version.
+
+## Usage notes
+
+Mount Cookie on protected routes only. A public sign-in route can clear an expired cookie by sending the same name, path and domain with MaxAge: -1. Use separate signing keys or explicitly checked audiences for tokens issued for different purposes.

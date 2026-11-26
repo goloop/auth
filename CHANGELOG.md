@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Keep refresh token rotations on the same account.
 
+Explain cookie routing and access token boundaries.
+
 ## [1.0.0] - 2026-10-18
 
 ### Changed
